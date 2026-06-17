@@ -325,18 +325,76 @@ function phonePage({ room, token }) {
   <style>
     body { font-family: system-ui, sans-serif; max-width: 640px; margin: 24px auto; padding: 0 16px; }
     .box { border: 1px solid #ccc; border-radius: 12px; padding: 18px; margin: 16px 0; }
-    input, button { font-size: 18px; margin-top: 12px; }
-    button { padding: 12px 14px; border-radius: 8px; border: 1px solid #888; }
+    input[type=file], button { font-size: 18px; margin-top: 12px; }
+    button { padding: 12px 14px; border-radius: 8px; border: 1px solid #888; background: #f8f8f8; cursor: pointer; }
     img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px; margin-top: 12px; }
-    .status { font-weight: 700; white-space: pre-line; }
+    .status { font-weight: 700; white-space: pre-line; margin-top: 10px; }
     .thumb { margin-top: 14px; }
+
+    /* Size selector */
+    .size-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .size-grid label {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      border: 2px solid #ccc;
+      border-radius: 10px;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-size: 15px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .size-grid label:has(input:checked) {
+      border-color: #0066cc;
+      background: #eef4ff;
+    }
+    .size-grid input[type=radio] {
+      display: none;
+    }
+    .size-grid .size-name {
+      font-weight: 700;
+      font-size: 16px;
+    }
+    .size-grid .size-desc {
+      font-size: 13px;
+      color: #555;
+    }
   </style>
 </head>
 <body>
   <h1>Send Photos</h1>
 
   <div class="box">
-    <p>Select photos already taken on your iPhone. They will be compressed locally to JPEG before upload.</p>
+    <p>Select photos from your phone. They are compressed locally to JPEG before upload.</p>
+
+    <strong>Output size:</strong>
+    <div class="size-grid">
+      <label>
+        <input type="radio" name="size" value="small">
+        <span class="size-name">Small</span>
+        <span class="size-desc">Best for PowerChart<br>≤1024 px · ~200 KB</span>
+      </label>
+      <label>
+        <input type="radio" name="size" value="medium" checked>
+        <span class="size-name">Medium</span>
+        <span class="size-desc">General use<br>≤1800 px · ~750 KB</span>
+      </label>
+      <label>
+        <input type="radio" name="size" value="large">
+        <span class="size-name">Large</span>
+        <span class="size-desc">High quality<br>≤2400 px · ~2 MB</span>
+      </label>
+      <label>
+        <input type="radio" name="size" value="original">
+        <span class="size-name">Original</span>
+        <span class="size-desc">Max quality, native size<br>(re-encoded, ≤2.8 MB)</span>
+      </label>
+    </div>
 
     <input id="file" type="file" accept="image/*" multiple>
 
@@ -349,50 +407,69 @@ function phonePage({ room, token }) {
 
 <script>
 const uploadUrl = "/u/${room}?token=${encodeURIComponent(token)}";
-const fileEl = document.getElementById("file");
-const sendEl = document.getElementById("send");
+const fileEl   = document.getElementById("file");
+const sendEl   = document.getElementById("send");
 const statusEl = document.getElementById("status");
 const previewEl = document.getElementById("preview");
 
 let compressedItems = [];
 
-const TARGET_MAX = 2 * 1024 * 1024;
-const MAX_DIM = 2400;
+// targetMax: bytes ceiling for the output blob
+// maxDim:    longest edge cap in pixels (Infinity = native)
+// qualLow / qualHigh: binary-search quality bounds
+const PRESETS = {
+  small:    { targetMax:  200 * 1024,      maxDim: 1024,     qualLow: 0.40, qualHigh: 0.75 },
+  medium:   { targetMax:  750 * 1024,      maxDim: 1800,     qualLow: 0.50, qualHigh: 0.85 },
+  large:    { targetMax: 2048 * 1024,      maxDim: 2400,     qualLow: 0.55, qualHigh: 0.92 },
+  original: { targetMax: 2867 * 1024,      maxDim: Infinity, qualLow: 0.88, qualHigh: 0.98 }
+};
 
-fileEl.addEventListener("change", async () => {
+function selectedPreset() {
+  const radio = document.querySelector('input[name="size"]:checked');
+  return PRESETS[radio ? radio.value : "medium"];
+}
+
+// Re-compress automatically when size changes (if files are already chosen)
+document.querySelectorAll('input[name="size"]').forEach(radio => {
+  radio.addEventListener("change", () => {
+    if (fileEl.files && fileEl.files.length) {
+      processFiles(fileEl.files);
+    }
+  });
+});
+
+fileEl.addEventListener("change", () => {
+  if (fileEl.files && fileEl.files.length) {
+    processFiles(fileEl.files);
+  }
+});
+
+async function processFiles(files) {
   compressedItems = [];
   sendEl.disabled = true;
   previewEl.innerHTML = "";
 
-  const files = Array.from(fileEl.files || []);
-  if (!files.length) return;
+  const filesArr = Array.from(files);
+  if (!filesArr.length) return;
 
-  statusEl.textContent = "Compressing " + files.length + " photo(s)...";
+  const preset = selectedPreset();
+  statusEl.textContent = "Compressing " + filesArr.length + " photo(s)...";
 
   try {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+    for (let i = 0; i < filesArr.length; i++) {
+      const file = filesArr[i];
+      statusEl.textContent = "Compressing " + (i + 1) + " of " + filesArr.length + "...";
 
-      statusEl.textContent =
-        "Compressing " + (i + 1) + " of " + files.length + "...";
+      const blob = await compressToJpeg(file, preset);
 
-      const blob = await compressToJpeg(file);
-
-      compressedItems.push({
-        blob,
-        originalName: file.name || ("photo-" + (i + 1) + ".jpg"),
-        filename: makeJpegFilename(file.name, i)
-      });
+      const filename = makeJpegFilename(file.name, i);
+      compressedItems.push({ blob, filename });
 
       const div = document.createElement("div");
       div.className = "thumb";
 
       const label = document.createElement("div");
-      label.textContent =
-        compressedItems[compressedItems.length - 1].filename +
-        " — " +
-        Math.round(blob.size / 1024) +
-        " KB";
+      label.textContent = filename + " — " + Math.round(blob.size / 1024) + " KB";
 
       const img = document.createElement("img");
       img.src = URL.createObjectURL(blob);
@@ -402,27 +479,23 @@ fileEl.addEventListener("change", async () => {
       previewEl.appendChild(div);
     }
 
-    statusEl.textContent =
-      "Ready: " + compressedItems.length + " compressed JPEG photo(s).";
+    statusEl.textContent = "Ready: " + compressedItems.length + " photo(s) compressed.";
     sendEl.disabled = false;
   } catch (err) {
     statusEl.textContent = "Compression failed: " + err.message;
   }
-});
+}
 
 sendEl.addEventListener("click", async () => {
   if (!compressedItems.length) return;
 
   sendEl.disabled = true;
-
   let sent = 0;
 
   try {
     for (let i = 0; i < compressedItems.length; i++) {
       const item = compressedItems[i];
-
-      statusEl.textContent =
-        "Sending " + (i + 1) + " of " + compressedItems.length + "...";
+      statusEl.textContent = "Sending " + (i + 1) + " of " + compressedItems.length + "...";
 
       const res = await fetch(uploadUrl, {
         method: "POST",
@@ -434,72 +507,63 @@ sendEl.addEventListener("click", async () => {
       });
 
       if (!res.ok) throw new Error(await res.text());
-
       sent++;
     }
 
-    statusEl.textContent =
-      "Sent " + sent + " photo(s) to desktop.";
+    statusEl.textContent = "Sent " + sent + " photo(s) to desktop.";
   } catch (err) {
-    statusEl.textContent =
-      "Send failed after " + sent + " photo(s): " + err.message;
+    statusEl.textContent = "Send failed after " + sent + " photo(s): " + err.message;
   } finally {
     sendEl.disabled = false;
   }
 });
 
-async function compressToJpeg(file) {
+async function compressToJpeg(file, preset) {
   const img = await loadImage(file);
 
-  let scale = Math.min(1, MAX_DIM / Math.max(img.naturalWidth, img.naturalHeight));
+  const nativeMax = Math.max(img.naturalWidth, img.naturalHeight);
+  let scale = preset.maxDim === Infinity
+    ? 1
+    : Math.min(1, preset.maxDim / nativeMax);
 
   for (let round = 0; round < 6; round++) {
     const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.width  = Math.max(1, Math.round(img.naturalWidth  * scale));
     canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
 
     const ctx = canvas.getContext("2d", { alpha: false });
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-    let low = 0.45;
-    let high = 0.92;
+    let low  = preset.qualLow;
+    let high = preset.qualHigh;
     let best = null;
 
     for (let i = 0; i < 8; i++) {
-      const q = (low + high) / 2;
+      const q    = (low + high) / 2;
       const blob = await canvasToBlob(canvas, q);
 
-      if (blob.size > TARGET_MAX) {
+      if (blob.size > preset.targetMax) {
         high = q;
       } else {
         best = blob;
-        low = q;
+        low  = q;
       }
     }
 
-    if (best && best.size <= TARGET_MAX) return best;
+    if (best && best.size <= preset.targetMax) return best;
 
     scale *= 0.85;
   }
 
-  throw new Error("Could not compress below 2 MB");
+  throw new Error("Could not compress to target size");
 }
 
 function loadImage(file) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
-
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve(img);
-    };
-
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Could not read image"));
-    };
-
+    img.onload  = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Could not read image")); };
     img.src = url;
   });
 }
