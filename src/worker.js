@@ -321,24 +321,30 @@ function phonePage({ room, token }) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Upload Photo</title>
+  <title>Upload Photos</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 640px; margin: 24px auto; padding: 0 16px; }
     .box { border: 1px solid #ccc; border-radius: 12px; padding: 18px; margin: 16px 0; }
     input, button { font-size: 18px; margin-top: 12px; }
     button { padding: 12px 14px; border-radius: 8px; border: 1px solid #888; }
     img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px; margin-top: 12px; }
-    .status { font-weight: 700; }
+    .status { font-weight: 700; white-space: pre-line; }
+    .thumb { margin-top: 14px; }
   </style>
 </head>
 <body>
-  <h1>Send Photo</h1>
+  <h1>Send Photos</h1>
+
   <div class="box">
-    <p>Take a photo. It will be compressed locally to JPEG before upload.</p>
-    <input id="file" type="file" accept="image/*" capture="environment">
+    <p>Select photos already taken on your iPhone. They will be compressed locally to JPEG before upload.</p>
+
+    <input id="file" type="file" accept="image/*" multiple>
+
     <div id="status" class="status"></div>
-    <img id="preview" style="display:none">
-    <button id="send" disabled>Send to desktop</button>
+
+    <button id="send" disabled>Send selected photos to desktop</button>
+
+    <div id="preview"></div>
   </div>
 
 <script>
@@ -348,25 +354,56 @@ const sendEl = document.getElementById("send");
 const statusEl = document.getElementById("status");
 const previewEl = document.getElementById("preview");
 
-let compressedBlob = null;
+let compressedItems = [];
 
 const TARGET_MAX = 2 * 1024 * 1024;
 const MAX_DIM = 2400;
 
 fileEl.addEventListener("change", async () => {
-  compressedBlob = null;
+  compressedItems = [];
   sendEl.disabled = true;
-  previewEl.style.display = "none";
+  previewEl.innerHTML = "";
 
-  const file = fileEl.files && fileEl.files[0];
-  if (!file) return;
+  const files = Array.from(fileEl.files || []);
+  if (!files.length) return;
 
-  statusEl.textContent = "Compressing...";
+  statusEl.textContent = "Compressing " + files.length + " photo(s)...";
+
   try {
-    compressedBlob = await compressToJpeg(file);
-    previewEl.src = URL.createObjectURL(compressedBlob);
-    previewEl.style.display = "block";
-    statusEl.textContent = "Ready: " + Math.round(compressedBlob.size / 1024) + " KB JPEG";
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+
+      statusEl.textContent =
+        "Compressing " + (i + 1) + " of " + files.length + "...";
+
+      const blob = await compressToJpeg(file);
+
+      compressedItems.push({
+        blob,
+        originalName: file.name || ("photo-" + (i + 1) + ".jpg"),
+        filename: makeJpegFilename(file.name, i)
+      });
+
+      const div = document.createElement("div");
+      div.className = "thumb";
+
+      const label = document.createElement("div");
+      label.textContent =
+        compressedItems[compressedItems.length - 1].filename +
+        " — " +
+        Math.round(blob.size / 1024) +
+        " KB";
+
+      const img = document.createElement("img");
+      img.src = URL.createObjectURL(blob);
+
+      div.appendChild(label);
+      div.appendChild(img);
+      previewEl.appendChild(div);
+    }
+
+    statusEl.textContent =
+      "Ready: " + compressedItems.length + " compressed JPEG photo(s).";
     sendEl.disabled = false;
   } catch (err) {
     statusEl.textContent = "Compression failed: " + err.message;
@@ -374,25 +411,38 @@ fileEl.addEventListener("change", async () => {
 });
 
 sendEl.addEventListener("click", async () => {
-  if (!compressedBlob) return;
+  if (!compressedItems.length) return;
 
   sendEl.disabled = true;
-  statusEl.textContent = "Sending...";
+
+  let sent = 0;
 
   try {
-    const res = await fetch(uploadUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "image/jpeg",
-        "X-Filename": "phone-photo-" + new Date().toISOString().replace(/[:.]/g, "-") + ".jpg"
-      },
-      body: compressedBlob
-    });
+    for (let i = 0; i < compressedItems.length; i++) {
+      const item = compressedItems[i];
 
-    if (!res.ok) throw new Error(await res.text());
-    statusEl.textContent = "Sent to desktop.";
+      statusEl.textContent =
+        "Sending " + (i + 1) + " of " + compressedItems.length + "...";
+
+      const res = await fetch(uploadUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "image/jpeg",
+          "X-Filename": item.filename
+        },
+        body: item.blob
+      });
+
+      if (!res.ok) throw new Error(await res.text());
+
+      sent++;
+    }
+
+    statusEl.textContent =
+      "Sent " + sent + " photo(s) to desktop.";
   } catch (err) {
-    statusEl.textContent = "Send failed: " + err.message;
+    statusEl.textContent =
+      "Send failed after " + sent + " photo(s): " + err.message;
   } finally {
     sendEl.disabled = false;
   }
@@ -462,6 +512,19 @@ function canvasToBlob(canvas, quality) {
       quality
     );
   });
+}
+
+function makeJpegFilename(originalName, index) {
+  const base = originalName
+    ? originalName.replace(/\\.[^.]+$/, "")
+    : "iphone-photo-" + (index + 1);
+
+  const safeBase = base
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "iphone-photo";
+
+  return safeBase + "-" + new Date().toISOString().replace(/[:.]/g, "-") + ".jpg";
 }
 </script>
 </body>
