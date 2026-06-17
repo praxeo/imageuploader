@@ -1,5 +1,5 @@
 {
-  "name": "photo-relay",
+  "name": "imageuploader",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
