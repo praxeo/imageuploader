@@ -295,7 +295,7 @@ ws.onmessage = async (event) => {
 
   const hint = document.createElement("div");
   hint.className = "hint";
-  hint.textContent = "To paste into PowerChart: right-click the image above → Copy Image → paste into PowerChart.";
+  hint.textContent = "To paste: right-click the image above → Copy Image → paste into destination.";
   card.appendChild(hint);
 
   const download = document.createElement("a");
