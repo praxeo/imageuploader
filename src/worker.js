@@ -221,10 +221,19 @@ function desktopPage({ room, token, phoneUrl, qrSvg }) {
     .qr svg { width: 280px; height: 280px; }
     .status { font-weight: 700; }
     img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px; margin-top: 12px; }
-    button, a.download {
+    a.download {
       display: inline-block; margin: 8px 8px 0 0; padding: 10px 12px;
       border: 1px solid #888; border-radius: 8px; background: #f8f8f8;
       color: #111; text-decoration: none; cursor: pointer; font-size: 15px;
+    }
+    .hint {
+      margin-top: 10px;
+      padding: 10px 12px;
+      background: #fffbe6;
+      border: 1px solid #ffe58f;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #555;
     }
     code { word-break: break-all; }
   </style>
@@ -284,29 +293,17 @@ ws.onmessage = async (event) => {
   img.src = objectUrl;
   card.appendChild(img);
 
+  const hint = document.createElement("div");
+  hint.className = "hint";
+  hint.textContent = "To paste into PowerChart: right-click the image above → Copy Image → paste into PowerChart.";
+  card.appendChild(hint);
+
   const download = document.createElement("a");
   download.href = objectUrl;
   download.download = meta.filename;
   download.className = "download";
   download.textContent = "Download JPEG";
   card.appendChild(download);
-
-  const copy = document.createElement("button");
-  copy.textContent = "Copy image to clipboard";
-  copy.onclick = async () => {
-    try {
-      if (!navigator.clipboard || !window.ClipboardItem) {
-        throw new Error("Clipboard image API unavailable");
-      }
-      await navigator.clipboard.write([
-        new ClipboardItem({ "image/jpeg": blob })
-      ]);
-      copy.textContent = "Copied";
-    } catch (err) {
-      copy.textContent = "Copy failed — use Download";
-    }
-  };
-  card.appendChild(copy);
 
   receivedEl.prepend(card);
 };
@@ -331,7 +328,6 @@ function phonePage({ room, token }) {
     .status { font-weight: 700; white-space: pre-line; margin-top: 10px; }
     .thumb { margin-top: 14px; }
 
-    /* Size selector */
     .size-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -364,6 +360,12 @@ function phonePage({ room, token }) {
       font-size: 13px;
       color: #555;
     }
+    .size-grid .size-rec {
+      font-size: 12px;
+      font-weight: 700;
+      color: #0066cc;
+      margin-top: 2px;
+    }
   </style>
 </head>
 <body>
@@ -375,24 +377,25 @@ function phonePage({ room, token }) {
     <strong>Output size:</strong>
     <div class="size-grid">
       <label>
-        <input type="radio" name="size" value="small">
+        <input type="radio" name="size" value="small" checked>
         <span class="size-name">Small</span>
-        <span class="size-desc">Best for PowerChart<br>≤1024 px · ~200 KB</span>
+        <span class="size-desc">≤1024 px · ~200 KB</span>
+        <span class="size-rec">✓ Recommended for PowerChart</span>
       </label>
       <label>
-        <input type="radio" name="size" value="medium" checked>
+        <input type="radio" name="size" value="medium">
         <span class="size-name">Medium</span>
-        <span class="size-desc">General use<br>≤1800 px · ~750 KB</span>
+        <span class="size-desc">≤1800 px · ~750 KB</span>
       </label>
       <label>
         <input type="radio" name="size" value="large">
         <span class="size-name">Large</span>
-        <span class="size-desc">High quality<br>≤2400 px · ~2 MB</span>
+        <span class="size-desc">≤2400 px · ~2 MB</span>
       </label>
       <label>
         <input type="radio" name="size" value="original">
         <span class="size-name">Original</span>
-        <span class="size-desc">Max quality, native size<br>(re-encoded, ≤2.8 MB)</span>
+        <span class="size-desc">Native size, max quality<br>(re-encoded, ≤2.8 MB)</span>
       </label>
     </div>
 
@@ -407,41 +410,33 @@ function phonePage({ room, token }) {
 
 <script>
 const uploadUrl = "/u/${room}?token=${encodeURIComponent(token)}";
-const fileEl   = document.getElementById("file");
-const sendEl   = document.getElementById("send");
-const statusEl = document.getElementById("status");
+const fileEl    = document.getElementById("file");
+const sendEl    = document.getElementById("send");
+const statusEl  = document.getElementById("status");
 const previewEl = document.getElementById("preview");
 
 let compressedItems = [];
 
-// targetMax: bytes ceiling for the output blob
-// maxDim:    longest edge cap in pixels (Infinity = native)
-// qualLow / qualHigh: binary-search quality bounds
 const PRESETS = {
-  small:    { targetMax:  200 * 1024,      maxDim: 1024,     qualLow: 0.40, qualHigh: 0.75 },
-  medium:   { targetMax:  750 * 1024,      maxDim: 1800,     qualLow: 0.50, qualHigh: 0.85 },
-  large:    { targetMax: 2048 * 1024,      maxDim: 2400,     qualLow: 0.55, qualHigh: 0.92 },
-  original: { targetMax: 2867 * 1024,      maxDim: Infinity, qualLow: 0.88, qualHigh: 0.98 }
+  small:    { targetMax:  200 * 1024, maxDim: 1024,     qualLow: 0.40, qualHigh: 0.75 },
+  medium:   { targetMax:  750 * 1024, maxDim: 1800,     qualLow: 0.50, qualHigh: 0.85 },
+  large:    { targetMax: 2048 * 1024, maxDim: 2400,     qualLow: 0.55, qualHigh: 0.92 },
+  original: { targetMax: 2867 * 1024, maxDim: Infinity, qualLow: 0.88, qualHigh: 0.98 }
 };
 
 function selectedPreset() {
   const radio = document.querySelector('input[name="size"]:checked');
-  return PRESETS[radio ? radio.value : "medium"];
+  return PRESETS[radio ? radio.value : "small"];
 }
 
-// Re-compress automatically when size changes (if files are already chosen)
 document.querySelectorAll('input[name="size"]').forEach(radio => {
   radio.addEventListener("change", () => {
-    if (fileEl.files && fileEl.files.length) {
-      processFiles(fileEl.files);
-    }
+    if (fileEl.files && fileEl.files.length) processFiles(fileEl.files);
   });
 });
 
 fileEl.addEventListener("change", () => {
-  if (fileEl.files && fileEl.files.length) {
-    processFiles(fileEl.files);
-  }
+  if (fileEl.files && fileEl.files.length) processFiles(fileEl.files);
 });
 
 async function processFiles(files) {
@@ -461,7 +456,6 @@ async function processFiles(files) {
       statusEl.textContent = "Compressing " + (i + 1) + " of " + filesArr.length + "...";
 
       const blob = await compressToJpeg(file, preset);
-
       const filename = makeJpegFilename(file.name, i);
       compressedItems.push({ blob, filename });
 
@@ -551,7 +545,6 @@ async function compressToJpeg(file, preset) {
     }
 
     if (best && best.size <= preset.targetMax) return best;
-
     scale *= 0.85;
   }
 
