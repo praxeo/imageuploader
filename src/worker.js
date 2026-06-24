@@ -236,6 +236,23 @@ function desktopPage({ room, token, phoneUrl, qrSvg }) {
       color: #555;
     }
     code { word-break: break-all; }
+    .rotate-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .rotate-btn {
+      font-size: 15px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid #888;
+      background: #f8f8f8;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .rotate-btn:active { background: #e8e8e8; }
+    .rotate-btn:disabled { opacity: 0.5; cursor: default; }
   </style>
 </head>
 <body>
@@ -279,19 +296,28 @@ ws.onmessage = async (event) => {
   };
   pendingMeta = null;
 
-  const blob = new Blob([event.data], { type: "image/jpeg" });
-  const objectUrl = URL.createObjectURL(blob);
+  const originalBlob = new Blob([event.data], { type: "image/jpeg" });
 
   const card = document.createElement("div");
   card.className = "box";
 
   const title = document.createElement("h2");
-  title.textContent = meta.filename + " (" + Math.round(blob.size / 1024) + " KB)";
   card.appendChild(title);
 
   const img = document.createElement("img");
-  img.src = objectUrl;
   card.appendChild(img);
+
+  const bar = document.createElement("div");
+  bar.className = "rotate-bar";
+  const rotateLeft = document.createElement("button");
+  rotateLeft.className = "rotate-btn";
+  rotateLeft.textContent = "⟲ Rotate left";
+  const rotateRight = document.createElement("button");
+  rotateRight.className = "rotate-btn";
+  rotateRight.textContent = "⟳ Rotate right";
+  bar.appendChild(rotateLeft);
+  bar.appendChild(rotateRight);
+  card.appendChild(bar);
 
   const hint = document.createElement("div");
   hint.className = "hint";
@@ -299,14 +325,81 @@ ws.onmessage = async (event) => {
   card.appendChild(hint);
 
   const download = document.createElement("a");
-  download.href = objectUrl;
   download.download = meta.filename;
   download.className = "download";
   download.textContent = "Download JPEG";
   card.appendChild(download);
 
+  let rotation = 0;
+  let currentUrl = null;
+
+  async function render() {
+    rotateLeft.disabled = rotateRight.disabled = true;
+    try {
+      const blob = rotation === 0
+        ? originalBlob
+        : await rotateJpeg(originalBlob, rotation);
+      if (currentUrl) URL.revokeObjectURL(currentUrl);
+      currentUrl = URL.createObjectURL(blob);
+      img.src = currentUrl;
+      download.href = currentUrl;
+      title.textContent = meta.filename + " (" + Math.round(blob.size / 1024) + " KB)";
+    } catch (err) {
+      title.textContent = meta.filename + " — rotate failed: " + err.message;
+    } finally {
+      rotateLeft.disabled = rotateRight.disabled = false;
+    }
+  }
+
+  rotateLeft.addEventListener("click", () => {
+    rotation = (rotation + 270) % 360;
+    render();
+  });
+  rotateRight.addEventListener("click", () => {
+    rotation = (rotation + 90) % 360;
+    render();
+  });
+
+  await render();
   receivedEl.prepend(card);
 };
+
+function loadImageFromBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const im = new Image();
+    im.onload  = () => { URL.revokeObjectURL(url); resolve(im); };
+    im.onerror = () => { URL.revokeObjectURL(url); reject(new Error("decode failed")); };
+    im.src = url;
+  });
+}
+
+async function rotateJpeg(blob, rotation) {
+  const im = await loadImageFromBlob(blob);
+  const w = im.naturalWidth;
+  const h = im.naturalHeight;
+  const swap = rotation === 90 || rotation === 270;
+
+  const canvas = document.createElement("canvas");
+  canvas.width  = swap ? h : w;
+  canvas.height = swap ? w : h;
+
+  const ctx = canvas.getContext("2d", { alpha: false });
+  switch (rotation) {
+    case 90:  ctx.translate(canvas.width, 0); ctx.rotate(Math.PI / 2); break;
+    case 180: ctx.translate(canvas.width, canvas.height); ctx.rotate(Math.PI); break;
+    case 270: ctx.translate(0, canvas.height); ctx.rotate(-Math.PI / 2); break;
+  }
+  ctx.drawImage(im, 0, 0, w, h);
+
+  return await new Promise((resolve, reject) => {
+    canvas.toBlob(
+      b => b ? resolve(b) : reject(new Error("encode failed")),
+      "image/jpeg",
+      0.92
+    );
+  });
+}
 </script>
 </body>
 </html>`;
