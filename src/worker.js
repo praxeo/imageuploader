@@ -180,7 +180,7 @@ export class RelayRoom extends DurableObject {
 
     const buffer = await request.arrayBuffer();
     if (buffer.byteLength > MAX_UPLOAD_BYTES) return text("Image too large", 413);
-    if (buffer.byteLength < 1000) return text("Image too small", 400);
+    if (buffer.byteLength < 500) return text("Image too small", 400);
 
     const filename =
       request.headers.get("x-filename") ||
@@ -460,6 +460,15 @@ function phonePage({ room, token }) {
       margin-top: 2px;
     }
 
+    .gray-row {
+      margin-top: 14px;
+      font-size: 15px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .gray-row input { width: 18px; height: 18px; }
+
     .rotate-bar {
       display: flex;
       align-items: center;
@@ -493,10 +502,21 @@ function phonePage({ room, token }) {
     <strong>Output size:</strong>
     <div class="size-grid">
       <label>
-        <input type="radio" name="size" value="xsmall" checked>
+        <input type="radio" name="size" value="nano">
+        <span class="size-name">Nano</span>
+        <span class="size-desc">≤360 px · ~20 KB</span>
+        <span class="size-rec">Last resort</span>
+      </label>
+      <label>
+        <input type="radio" name="size" value="tiny" checked>
+        <span class="size-name">Tiny</span>
+        <span class="size-desc">≤480 px · ~40 KB</span>
+        <span class="size-rec">✓ Recommended for Cerner</span>
+      </label>
+      <label>
+        <input type="radio" name="size" value="xsmall">
         <span class="size-name">X-Small</span>
         <span class="size-desc">≤640 px · ~90 KB</span>
-        <span class="size-rec">✓ Recommended for PowerChart</span>
       </label>
       <label>
         <input type="radio" name="size" value="small">
@@ -520,6 +540,11 @@ function phonePage({ room, token }) {
       </label>
     </div>
 
+    <label class="gray-row">
+      <input type="checkbox" id="grayscale">
+      <span>Grayscale (roughly halves file size)</span>
+    </label>
+
     <strong>Rotation:</strong>
     <div class="rotate-bar">
       <button type="button" id="rotate-left" class="rotate-btn">⟲ Left</button>
@@ -542,10 +567,13 @@ const fileEl    = document.getElementById("file");
 const sendEl    = document.getElementById("send");
 const statusEl  = document.getElementById("status");
 const previewEl = document.getElementById("preview");
+const grayEl    = document.getElementById("grayscale");
 
 let compressedItems = [];
 
 const PRESETS = {
+  nano:     { targetMax:   20 * 1024, maxDim:  360,     qualLow: 0.20, qualHigh: 0.55 },
+  tiny:     { targetMax:   40 * 1024, maxDim:  480,     qualLow: 0.25, qualHigh: 0.60 },
   xsmall:   { targetMax:   90 * 1024, maxDim:  640,     qualLow: 0.35, qualHigh: 0.70 },
   small:    { targetMax:  200 * 1024, maxDim: 1024,     qualLow: 0.40, qualHigh: 0.75 },
   medium:   { targetMax:  750 * 1024, maxDim: 1800,     qualLow: 0.50, qualHigh: 0.85 },
@@ -555,7 +583,7 @@ const PRESETS = {
 
 function selectedPreset() {
   const radio = document.querySelector('input[name="size"]:checked');
-  return PRESETS[radio ? radio.value : "xsmall"];
+  return PRESETS[radio ? radio.value : "tiny"];
 }
 
 let rotation = 0;
@@ -578,6 +606,10 @@ document.querySelectorAll('input[name="size"]').forEach(radio => {
   });
 });
 
+grayEl.addEventListener("change", () => {
+  if (fileEl.files && fileEl.files.length) processFiles(fileEl.files);
+});
+
 fileEl.addEventListener("change", () => {
   if (fileEl.files && fileEl.files.length) processFiles(fileEl.files);
 });
@@ -591,6 +623,7 @@ async function processFiles(files) {
   if (!filesArr.length) return;
 
   const preset = selectedPreset();
+  const gray = grayEl.checked;
   statusEl.textContent = "Compressing " + filesArr.length + " photo(s)...";
 
   try {
@@ -598,7 +631,7 @@ async function processFiles(files) {
       const file = filesArr[i];
       statusEl.textContent = "Compressing " + (i + 1) + " of " + filesArr.length + "...";
 
-      const blob = await compressToJpeg(file, preset, rotation);
+      const blob = await compressToJpeg(file, preset, rotation, gray);
       const filename = makeJpegFilename(file.name, i);
       compressedItems.push({ blob, filename });
 
@@ -655,7 +688,7 @@ sendEl.addEventListener("click", async () => {
   }
 });
 
-async function compressToJpeg(file, preset, rotation) {
+async function compressToJpeg(file, preset, rotation, gray) {
   rotation = ((rotation || 0) % 360 + 360) % 360;
   const img = await loadImage(file);
 
@@ -664,7 +697,7 @@ async function compressToJpeg(file, preset, rotation) {
     ? 1
     : Math.min(1, preset.maxDim / nativeMax);
 
-  for (let round = 0; round < 6; round++) {
+  for (let round = 0; round < 8; round++) {
     const sw = Math.max(1, Math.round(img.naturalWidth  * scale));
     const sh = Math.max(1, Math.round(img.naturalHeight * scale));
     const swap = rotation === 90 || rotation === 270;
@@ -675,6 +708,7 @@ async function compressToJpeg(file, preset, rotation) {
 
     const ctx = canvas.getContext("2d", { alpha: false });
     ctx.save();
+    if (gray) ctx.filter = "grayscale(1)";
     switch (rotation) {
       case 90:  ctx.translate(canvas.width, 0); ctx.rotate(Math.PI / 2); break;
       case 180: ctx.translate(canvas.width, canvas.height); ctx.rotate(Math.PI); break;
@@ -685,7 +719,14 @@ async function compressToJpeg(file, preset, rotation) {
 
     let low  = preset.qualLow;
     let high = preset.qualHigh;
-    let best = null;
+
+    const floorBlob = await canvasToBlob(canvas, low);
+    if (floorBlob.size > preset.targetMax) {
+      scale *= 0.85;
+      continue;
+    }
+
+    let best = floorBlob;
 
     for (let i = 0; i < 8; i++) {
       const q    = (low + high) / 2;
@@ -699,8 +740,7 @@ async function compressToJpeg(file, preset, rotation) {
       }
     }
 
-    if (best && best.size <= preset.targetMax) return best;
-    scale *= 0.85;
+    return best;
   }
 
   throw new Error("Could not compress to target size");
@@ -748,7 +788,7 @@ function escapeHtml(s) {
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;"
+    "'": "&#39;",
+    '"': "&quot;"
   })[c]);
 }
