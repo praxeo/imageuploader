@@ -6,6 +6,8 @@ The existing QR code supports both photo and generic file transfers:
 2. Scan its QR code with the phone.
 3. On that same phone page, scroll to **Send Files**.
 4. Select and send one or more files from the file picker.
+3. On the phone page, select **Send documents or other files instead**.
+4. Select and send one or more files.
 5. A **Download file** button appears in the destination browser when each
    upload completes.
 

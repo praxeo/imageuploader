@@ -76,6 +76,14 @@ export default {
       return html(phonePage({ room, token }));
     }
 
+    const filePageMatch = path.match(/^\/f\/([^/]+)$/);
+    if (filePageMatch && request.method === "GET") {
+      const room = filePageMatch[1];
+      if (!safeRoomId(room)) return text("Bad room id", 400);
+      const token = url.searchParams.get("token") || "";
+      return html(filePage({ room, token }));
+    }
+
     const fileApiMatch = path.match(/^\/api\/files\/([^/]+)\/(start|part|complete)$/);
     if (fileApiMatch) {
       const [, room, action] = fileApiMatch;
@@ -388,6 +396,7 @@ function desktopPage({ room, token, phoneUrl, qrSvg }) {
     <p>Scan this QR code from the phone. Keep this desktop page open.</p>
     <div class="qr">${qrSvg}</div>
     <p><code>${escapeHtml(phoneUrl)}</code></p>
+    <p><a href="/f/${room}?token=${encodeURIComponent(token)}">Send any type of file instead</a></p>
   </div>
 
   <div id="received"></div>
@@ -566,6 +575,19 @@ function phonePage({ room, token }) {
     input[type=file], button { font-size: 18px; margin-top: 12px; }
     button { padding: 12px 14px; border-radius: 8px; border: 1px solid #888; background: #f8f8f8; cursor: pointer; }
     progress { display: block; width: 100%; height: 22px; margin-top: 14px; }
+    .mode-link {
+      display: block;
+      padding: 14px;
+      margin-bottom: 18px;
+      border: 2px solid #0066cc;
+      border-radius: 10px;
+      background: #eef4ff;
+      color: #004d99;
+      font-size: 18px;
+      font-weight: 700;
+      text-align: center;
+      text-decoration: none;
+    }
     img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px; margin-top: 12px; }
     .status { font-weight: 700; white-space: pre-line; margin-top: 10px; }
     .thumb { margin-top: 14px; }
@@ -646,6 +668,7 @@ function phonePage({ room, token }) {
   <h1>Send Photos</h1>
 
   <div class="box">
+    <a class="mode-link" href="/f/${room}?token=${encodeURIComponent(token)}">Send documents or other files instead</a>
     <p>Select photos from your phone. They are compressed locally to JPEG before upload.</p>
 
     <strong>Output size:</strong>
@@ -1007,6 +1030,108 @@ function makeJpegFilename(originalName, index) {
     .slice(0, 80) || "iphone-photo";
 
   return safeBase + "-" + new Date().toISOString().replace(/[:.]/g, "-") + ".jpg";
+}
+</script>
+</body>
+</html>`;
+}
+
+function filePage({ room, token }) {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Send Files</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 24px auto; padding: 0 16px; }
+    .box { border: 1px solid #ccc; border-radius: 12px; padding: 18px; margin: 16px 0; }
+    input, button { font-size: 18px; margin-top: 12px; max-width: 100%; }
+    button { padding: 12px 14px; border-radius: 8px; border: 1px solid #888; background: #f8f8f8; cursor: pointer; }
+    button:disabled { opacity: 0.55; cursor: default; }
+    progress { display: block; width: 100%; height: 22px; margin-top: 14px; }
+    #status { font-weight: 700; white-space: pre-line; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Send Files</h1>
+  <div class="box">
+    <p>Select files to store temporarily in Cloudflare R2 and make available on the connected desktop. Files expire after 24 hours.</p>
+    <input id="files" type="file" multiple>
+    <progress id="progress" value="0" max="1"></progress>
+    <div id="status"></div>
+    <button id="send" disabled>Send selected files to desktop</button>
+    <p><a href="/u/${room}?token=${encodeURIComponent(token)}">Return to photo upload</a></p>
+  </div>
+<script>
+const apiBase = "/api/files/${room}";
+const token = ${JSON.stringify(token)};
+const filesEl = document.getElementById("files");
+const sendEl = document.getElementById("send");
+const statusEl = document.getElementById("status");
+const progressEl = document.getElementById("progress");
+
+filesEl.addEventListener("change", () => {
+  sendEl.disabled = !filesEl.files.length;
+  statusEl.textContent = filesEl.files.length ? filesEl.files.length + " file(s) ready." : "";
+});
+
+sendEl.addEventListener("click", async () => {
+  const files = Array.from(filesEl.files);
+  if (!files.length) return;
+  sendEl.disabled = true;
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  let uploadedBytes = 0;
+  progressEl.max = totalBytes || 1;
+
+  try {
+    for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+      const file = files[fileIndex];
+      statusEl.textContent = "Starting " + (fileIndex + 1) + " of " + files.length + ": " + file.name;
+      const started = await api("start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, mime: file.type, size: file.size })
+      });
+      const parts = [];
+      const partCount = Math.ceil(file.size / started.chunkSize);
+      for (let index = 0; index < partCount; index++) {
+        const start = index * started.chunkSize;
+        const end = Math.min(file.size, start + started.chunkSize);
+        statusEl.textContent = "Uploading " + file.name + " — part " + (index + 1) + " of " + partCount;
+        const part = await api("part", {
+          method: "PUT",
+          query: { id: started.transferId, part: index + 1 },
+          body: file.slice(start, end)
+        });
+        parts.push(part);
+        uploadedBytes += end - start;
+        progressEl.value = uploadedBytes;
+      }
+      await api("complete", {
+        method: "POST",
+        query: { id: started.transferId },
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parts })
+      }, false);
+    }
+    statusEl.textContent = "Sent " + files.length + " file(s) to desktop.";
+  } catch (err) {
+    statusEl.textContent = "Upload failed: " + err.message;
+  } finally {
+    sendEl.disabled = false;
+  }
+});
+
+async function api(action, options, expectJson = true) {
+  const url = new URL(apiBase + "/" + action, location.origin);
+  url.searchParams.set("token", token);
+  for (const [key, value] of Object.entries(options.query || {})) url.searchParams.set(key, value);
+  const requestOptions = { ...options };
+  delete requestOptions.query;
+  const response = await fetch(url, requestOptions);
+  if (!response.ok) throw new Error(await response.text());
+  return expectJson ? response.json() : response.text();
 }
 </script>
 </body>
