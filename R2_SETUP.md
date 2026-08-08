@@ -4,6 +4,8 @@ The existing QR code supports both photo and generic file transfers:
 
 1. Keep the destination desktop browser open on the Photo Relay page.
 2. Scan its QR code with the phone.
+3. On that same phone page, scroll to **Send Files**.
+4. Select and send one or more files from the file picker.
 3. On the phone page, select **Send documents or other files instead**.
 4. Select and send one or more files.
 5. A **Download file** button appears in the destination browser when each
@@ -11,6 +13,7 @@ The existing QR code supports both photo and generic file transfers:
 
 Files use 8 MiB multipart uploads, can be up to 5 GiB, and are automatically
 deleted after 24 hours. The original photo route retains its 3 MiB JPEG limit.
+There is no separate file-upload page or desktop-side upload link.
 
 ## One-time Cloudflare dashboard setup
 

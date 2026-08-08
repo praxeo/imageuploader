@@ -574,6 +574,7 @@ function phonePage({ room, token }) {
     .box { border: 1px solid #ccc; border-radius: 12px; padding: 18px; margin: 16px 0; }
     input[type=file], button { font-size: 18px; margin-top: 12px; }
     button { padding: 12px 14px; border-radius: 8px; border: 1px solid #888; background: #f8f8f8; cursor: pointer; }
+    progress { display: block; width: 100%; height: 22px; margin-top: 14px; }
     .mode-link {
       display: block;
       padding: 14px;
@@ -732,6 +733,15 @@ function phonePage({ room, token }) {
     <div id="preview"></div>
   </div>
 
+  <h1>Send Files</h1>
+  <div class="box">
+    <p>Select documents or other files from your phone. They are stored temporarily in Cloudflare R2 and expire after 24 hours.</p>
+    <input id="generic-files" type="file" multiple>
+    <progress id="file-progress" value="0" max="1"></progress>
+    <div id="file-status" class="status"></div>
+    <button id="file-send" disabled>Send selected files to desktop</button>
+  </div>
+
 <script>
 const uploadUrl = "/u/${room}?token=${encodeURIComponent(token)}";
 const fileEl    = document.getElementById("file");
@@ -739,6 +749,13 @@ const sendEl    = document.getElementById("send");
 const statusEl  = document.getElementById("status");
 const previewEl = document.getElementById("preview");
 const grayEl    = document.getElementById("grayscale");
+
+const genericFilesEl = document.getElementById("generic-files");
+const fileSendEl = document.getElementById("file-send");
+const fileStatusEl = document.getElementById("file-status");
+const fileProgressEl = document.getElementById("file-progress");
+const fileApiBase = "/api/files/${room}";
+const fileToken = ${JSON.stringify(token)};
 
 let compressedItems = [];
 
@@ -858,6 +875,71 @@ sendEl.addEventListener("click", async () => {
     sendEl.disabled = false;
   }
 });
+
+genericFilesEl.addEventListener("change", () => {
+  fileSendEl.disabled = !genericFilesEl.files.length;
+  fileStatusEl.textContent = genericFilesEl.files.length
+    ? genericFilesEl.files.length + " file(s) ready."
+    : "";
+});
+
+fileSendEl.addEventListener("click", async () => {
+  const files = Array.from(genericFilesEl.files);
+  if (!files.length) return;
+  fileSendEl.disabled = true;
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  let uploadedBytes = 0;
+  fileProgressEl.max = totalBytes || 1;
+
+  try {
+    for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+      const file = files[fileIndex];
+      fileStatusEl.textContent = "Starting " + (fileIndex + 1) + " of " + files.length + ": " + file.name;
+      const started = await fileApi("start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, mime: file.type, size: file.size })
+      });
+      const parts = [];
+      const partCount = Math.ceil(file.size / started.chunkSize);
+      for (let index = 0; index < partCount; index++) {
+        const start = index * started.chunkSize;
+        const end = Math.min(file.size, start + started.chunkSize);
+        fileStatusEl.textContent = "Uploading " + file.name + " — part " + (index + 1) + " of " + partCount;
+        const part = await fileApi("part", {
+          method: "PUT",
+          query: { id: started.transferId, part: index + 1 },
+          body: file.slice(start, end)
+        });
+        parts.push(part);
+        uploadedBytes += end - start;
+        fileProgressEl.value = uploadedBytes;
+      }
+      await fileApi("complete", {
+        method: "POST",
+        query: { id: started.transferId },
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parts })
+      }, false);
+    }
+    fileStatusEl.textContent = "Sent " + files.length + " file(s) to desktop.";
+  } catch (err) {
+    fileStatusEl.textContent = "Upload failed: " + err.message;
+  } finally {
+    fileSendEl.disabled = false;
+  }
+});
+
+async function fileApi(action, options, expectJson = true) {
+  const url = new URL(fileApiBase + "/" + action, location.origin);
+  url.searchParams.set("token", fileToken);
+  for (const [key, value] of Object.entries(options.query || {})) url.searchParams.set(key, value);
+  const requestOptions = { ...options };
+  delete requestOptions.query;
+  const response = await fetch(url, requestOptions);
+  if (!response.ok) throw new Error(await response.text());
+  return expectJson ? response.json() : response.text();
+}
 
 async function compressToJpeg(file, preset, rotation, gray) {
   rotation = ((rotation || 0) % 360 + 360) % 360;
