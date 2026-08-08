@@ -574,6 +574,19 @@ function phonePage({ room, token }) {
     .box { border: 1px solid #ccc; border-radius: 12px; padding: 18px; margin: 16px 0; }
     input[type=file], button { font-size: 18px; margin-top: 12px; }
     button { padding: 12px 14px; border-radius: 8px; border: 1px solid #888; background: #f8f8f8; cursor: pointer; }
+    .mode-link {
+      display: block;
+      padding: 14px;
+      margin-bottom: 18px;
+      border: 2px solid #0066cc;
+      border-radius: 10px;
+      background: #eef4ff;
+      color: #004d99;
+      font-size: 18px;
+      font-weight: 700;
+      text-align: center;
+      text-decoration: none;
+    }
     img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px; margin-top: 12px; }
     .status { font-weight: 700; white-space: pre-line; margin-top: 10px; }
     .thumb { margin-top: 14px; }
@@ -654,6 +667,7 @@ function phonePage({ room, token }) {
   <h1>Send Photos</h1>
 
   <div class="box">
+    <a class="mode-link" href="/f/${room}?token=${encodeURIComponent(token)}">Send documents or other files instead</a>
     <p>Select photos from your phone. They are compressed locally to JPEG before upload.</p>
 
     <strong>Output size:</strong>
